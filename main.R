@@ -13,20 +13,27 @@ h <- function() {
     c(marks("a"), marks("b"));
 }
 
+h2 <- function() {
+    with.mark("a", "gamma", {
+        print(c(marks("a"), marks("b")));
+    })
+    print(c(marks("a"), marks("b")));
+}
+
 add.mark <- function(name, val) {
-    if(!is.environment(marks)) {
-        pframe <- parent.frame(1)
+    pframe <- parent.frame(1)
+    if(!is.environment(pframe[["marks"]])) {
         pframe[["marks"]] <- new.env();
-        pframe[["marks"]][[name]] <- val;
     }
+    pframe[["marks"]][[name]] <- val;
 }
 
 with.mark <- function(name,val,body) {
-    if(!is.environment(marks)) {
-        pframe <- parent.frame(1)
+    pframe <- parent.frame(1)
+    if(!is.environment(pframe[["marks"]])) {
         pframe[["marks"]] <- new.env();
-        pframe[["marks"]][[name]] <- val;
     }
+    pframe[["marks"]][[name]] <- val;
     body;
 }
 
