@@ -23,11 +23,11 @@
   (parameterize ([current-directory "examples"])
     (run-benchmarks
      test-paths
-     '((r-marks no-marks))
+     '((r-marks c-marks no-marks))
      (λ (file marks)
        (match marks
          ['r-marks  (time (system* R      (path-replace-suffix file ".R-marks")))]
-         ;;['c-marks  (time (system* mark-R (path-replace-suffix file ".R-marks")))]
+         ['c-marks  (time (system* mark-R (path-replace-suffix file ".R-marks")))]
          ['no-marks (time (system* R      (path-replace-suffix file ".R")))]))
      ;;#:build (λ (marks) (void))
      ;;#:clean (λ (marks) (void))
