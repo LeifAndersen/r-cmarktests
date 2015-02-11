@@ -15,6 +15,9 @@
 (define-runtime-path R-marks2 "builds/marks2")
 (define-runtime-path R-marks3 "builds/marks3")
 (define-runtime-path R-clean  "builds/clean")
+(define-runtime-path R-marks2-exe "builds/marks2/bin/Rscript")
+(define-runtime-path R-marks3-exe "builds/marks2/bin/Rscript")
+(define-runtime-path R-clean-exe  "builds/clean/bin/Rscript")
 
 ;; Utilities
 (define-runtime-path tar (find-executable-path "tar"))
@@ -43,12 +46,20 @@
   (parameterize ([current-directory "examples"])
     (run-benchmarks
      test-paths
-     '((marks2 marks3 no-marks))
-     (λ (file marks)
-       (match marks
-         ['marks2   (time (system* R-marks2 (path-replace-suffix file ".R-marks")))]
-         ['marks3   (time (system* R-marks3 (path-replace-suffix file ".R-marks")))]
-         ['no-marks (time (system* R-clean  (path-replace-suffix file ".R")))]))
+     '((marks2 marks3 no-marks)
+       (sample no-sample))
+     (λ (file marks sample)
+       (match (list marks sample)
+         ['(marks2 no-sample)
+          (time (system* R-marks2-exe (path-replace-suffix file ".R-marks")))]
+         ['(marks2 sample)
+          (time (system* R-marks2-exe (path-replace-suffix file ".R-marks+sample")))]
+         ['(marks3 no-sample)
+          (time (system* R-marks3-exe (path-replace-suffix file ".R-marks")))]
+         ['(marks3 sample)
+          (time (system* R-marks3-exe (path-replace-suffix file ".R-marks+sample")))]
+         [`(no-marks ,_)
+          (time (system* R-clean-exe  (path-replace-suffix file ".R")))]))
      ;;#:build
      ;;(λ (file marks)
      ;;  (match marks
@@ -74,7 +85,7 @@
      #:x-label #f
      #:y-label "normalized time"
      (render-benchmark-alts
-      '(no-marks)
+      '(no-marks no-sample)
       results
       #:normalize? #t)
      plot-file*)))
