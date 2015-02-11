@@ -1,0 +1,231 @@
+diff --git a/src/include/Defn.h b/src/include/Defn.h
+index 3dd9d48..3db7338 100644
+--- a/src/include/Defn.h
++++ b/src/include/Defn.h
+@@ -504,6 +504,12 @@ typedef struct RPRSTACK {
+     struct RPRSTACK *next;
+ } RPRSTACK;
+ 
++/* Continuation Marks Structure */
++typedef struct RMARKS {
++    struct RMARKS *next;        /* Next RMARKS */
++    SEXP marks;                 /* Marks */
++} RMARKS;
++
+ /* Evaluation Context Structure */
+ typedef struct RCNTXT {
+     struct RCNTXT *nextcontext;	/* The next context up the chain */
+@@ -517,6 +523,7 @@ typedef struct RCNTXT {
+     SEXP call;			/* The call that effected this context*/
+     SEXP cloenv;		/* The environment */
+     SEXP conexit;		/* Interpreted "on.exit" code */
++    RMARKS marks;              /* Marks */
+     void (*cend)(void *);	/* C "on.exit" thunk */
+     void *cenddata;		/* data for C "on.exit" thunk */
+     void *vmax;		        /* top of R_alloc stack */
+@@ -826,6 +833,7 @@ LibExtern Rboolean UseInternet2;
+ # define allocCharsxp		Rf_allocCharsxp
+ # define asVecSize		Rf_asVecSize
+ # define begincontext		Rf_begincontext
++# define beginmarks             RF_beginmarks
+ # define BindDomain		Rf_BindDomain
+ # define check_stack_balance	Rf_check_stack_balance
+ # define check1arg		Rf_check1arg
+@@ -856,6 +864,7 @@ LibExtern Rboolean UseInternet2;
+ # define EncodeString           Rf_EncodeString
+ # define EnsureString 		Rf_EnsureString
+ # define endcontext		Rf_endcontext
++# define endmarks               Rf_endmarks
+ # define envlength		Rf_envlength
+ # define ErrorMessage		Rf_ErrorMessage
+ # define evalList		Rf_evalList
+@@ -1176,8 +1185,10 @@ SEXP vectorIndex(SEXP, SEXP, int, int, int, SEXP, Rboolean);
+ 
+ #ifdef R_USE_SIGNALS
+ void begincontext(RCNTXT*, int, SEXP, SEXP, SEXP, SEXP, SEXP);
++void beginmarks(RMARKS*, RCNTXT*);
+ SEXP dynamicfindVar(SEXP, RCNTXT*);
+ void endcontext(RCNTXT*);
++void endmarks(RMARKS*);
+ int framedepth(RCNTXT*);
+ void R_InsertRestartHandlers(RCNTXT *, Rboolean);
+ void NORET R_JumpToContext(RCNTXT *, int, SEXP);
+diff --git a/src/include/Internal.h b/src/include/Internal.h
+index 09b5c87..b7e805d 100644
+--- a/src/include/Internal.h
++++ b/src/include/Internal.h
+@@ -287,6 +287,8 @@ SEXP do_pack(SEXP, SEXP, SEXP, SEXP);
+ SEXP do_packBits(SEXP, SEXP, SEXP, SEXP);
+ SEXP do_paren(SEXP, SEXP, SEXP, SEXP);
+ SEXP do_parentenv(SEXP, SEXP, SEXP, SEXP);
++SEXP do_marks(SEXP, SEXP, SEXP, SEXP);
++SEXP do_add_mark(SEXP, SEXP, SEXP, SEXP);
+ SEXP do_parentenvgets(SEXP, SEXP, SEXP, SEXP);
+ SEXP do_parentframe(SEXP, SEXP, SEXP, SEXP);
+ SEXP do_parse(SEXP, SEXP, SEXP, SEXP);
+diff --git a/src/library/base/R/eval.R b/src/library/base/R/eval.R
+index b19ff32..00448dc 100644
+--- a/src/library/base/R/eval.R
++++ b/src/library/base/R/eval.R
+@@ -44,6 +44,12 @@ parent.env <- function(env)
+ `parent.env<-` <- function(env, value)
+     .Internal("parent.env<-"(env, value))
+ 
++marks <- function(name)
++    .Internal(marks(name))
++
++add.mark <- function(name, val)
++    .Internal(add.mark(name,val))
++
+ local <-
+     function (expr, envir = new.env())
+     eval.parent(substitute(eval(quote(expr), envir)))
+diff --git a/src/main/builtin.c b/src/main/builtin.c
+index 9ad6409..4dfc2e7 100644
+--- a/src/main/builtin.c
++++ b/src/main/builtin.c
+@@ -356,6 +356,82 @@ SEXP attribute_hidden do_parentenv(SEXP call, SEXP op, SEXP args, SEXP rho)
+     return( ENCLOS(arg) );
+ }
+ 
++SEXP attribute_hidden CollectMarks(SEXP name)
++{
++    SEXP result, t;
++    RCNTXT *c = R_GlobalContext;
++    RMARKS *m;
++    int n = 0;
++
++    /* Get stack length */
++    for(m = &c->marks;
++        m != NULL;
++        m = m->next) {
++        if(m->marks != NULL) {
++            n++;
++        }
++    }
++
++    /* Get marks */
++    PROTECT(result = allocList(n));
++    t = result;
++    for(m = &c->marks;
++        m != NULL;
++        m = m->next) {
++        if(m->marks != NULL) {
++            //PrintValue(findVarInFrame(m->marks, name));
++            //SETCAR(t, findVarInFrame(m->marks, name));
++            SETCAR(t, m->marks);
++            t = CDR(t);
++        }
++    }
++    UNPROTECT(1);
++    return result;
++}
++
++SEXP attribute_hidden do_marks(SEXP call, SEXP op, SEXP args, SEXP rho)
++{
++    checkArity(op, args);
++    SEXP arg = CAR(args);
++    if(!isString(arg)) {
++        error(_("argument is not a string"));
++    }
++
++    return CollectMarks(arg);
++}
++
++SEXP attribute_hidden AddMark(SEXP mark, SEXP val)
++{
++    RCNTXT *c = R_GlobalContext;
++    RMARKS *m;
++
++    /* get context of next frame up */
++    if(c != NULL && c->callflag != CTXT_TOPLEVEL) {
++        c = c->nextcontext;
++    }
++    m = &c->marks;
++
++    /* Create new marks table if needed, add mark */
++    if(m->marks == NULL) {
++        m->marks = NewEnvironment(R_NilValue, R_NilValue, R_EmptyEnv);
++    }
++    defineVar(mark, val, m->marks);
++
++    return val;
++}
++
++SEXP attribute_hidden do_add_mark(SEXP call, SEXP op, SEXP args, SEXP rho)
++{
++    checkArity(op,args);
++    SEXP mark = CAR(args);
++    SEXP val = CAR(CDR(args));
++    if(!isString(mark)) {
++        error(_("argument is not a string"));
++    }
++
++    return AddMark(mark, val);
++}
++
+ static Rboolean R_IsImportsEnv(SEXP env)
+ {
+     if (isNull(env) || !isEnvironment(env))
+diff --git a/src/main/context.c b/src/main/context.c
+index daf34d1..6758f1f 100644
+--- a/src/main/context.c
++++ b/src/main/context.c
+@@ -251,6 +251,8 @@ void begincontext(RCNTXT * cptr, int flags,
+     cptr->nextcontext = R_GlobalContext;
+     cptr->returnValue = NULL;
+ 
++    beginmarks(&cptr->marks, cptr);
++
+     R_GlobalContext = cptr;
+ }
+ 
+@@ -275,9 +277,35 @@ void endcontext(RCNTXT * cptr)
+     }
+     if (R_ExitContext == cptr)
+     	R_ExitContext = NULL;
++    endmarks(&cptr->marks);
+     R_GlobalContext = cptr->nextcontext;
+ }
+ 
++/* beginmarks - Begin marks (in a context)*/
++
++void beginmarks(RMARKS * marks, RCNTXT * cptr)
++{
++    RMARKS* m;
++    /* marks->marks = NewEnvironment(R_NilValue, R_NilValue, R_EmptyEnv); */
++    marks->marks = NULL;
++    if(&cptr->nextcontext == NULL) {
++        marks->next = NULL;
++    } else {
++        m = &cptr->nextcontext->marks;
++        if(m->marks == NULL) {
++            marks->next = m->next;
++        } else {
++            marks->next = m;
++        }
++    }
++}
++
++/* marks */
++
++void endmarks(RMARKS * marks)
++{
++    /* Nothing to do? */
++}
+ 
+ /* findcontext - find the correct context */
+ 
+diff --git a/src/main/names.c b/src/main/names.c
+index 0784cea..75658e7 100644
+--- a/src/main/names.c
++++ b/src/main/names.c
+@@ -743,6 +743,8 @@ FUNTAB R_FunTab[] =
+ {"new.env",	do_newenv,	0,	11,     3,      {PP_FUNCALL, PREC_FN,	0}},
+ {"parent.env",  do_parentenv,   0,	11,     1,      {PP_FUNCALL, PREC_FN,	0}},
+ {"parent.env<-",do_parentenvgets, 0,	11,     2,      {PP_FUNCALL, PREC_LEFT,	1}},
++{"marks",       do_marks,       0,      11,     1,      {PP_FUNCALL, PREC_FN,   0}},
++{"add.mark",    do_add_mark,    0,      11,     2,      {PP_FUNCALL, PREC_FN,   0}},
+ {"topenv",	do_topenv,	0,	11,	2,	{PP_FUNCALL, PREC_FN,	0}},
+ {"l10n_info",	do_l10n_info,	0,	11,	0,	{PP_FUNCALL, PREC_FN,	0}},
+ {"Cstack_info", do_Cstack_info,	0,	11,	0,	{PP_FUNCALL, PREC_FN,	0}},
