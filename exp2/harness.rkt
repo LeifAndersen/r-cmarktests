@@ -28,7 +28,7 @@
   (make-directory* destination)
   (system* tar "xvf" bundle "-C" destination "--strip-components=1")
   (parameterize ([current-directory destination])
-    (system* svn "update")
+    (system* svn "upgrade")
     (when p (with-input-from-file p (λ () (system* patch "-p1"))))
     (system* "./configure" "--without-recommended-packages")
     (system* make "-j5")))
